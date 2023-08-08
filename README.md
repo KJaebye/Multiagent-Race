@@ -1,5 +1,5 @@
 # Multiagent-Race
-This repo provides environments for MuJoCo multi-agent racing.
+This repo provides environments for MuJoCo multi-agent race.
 ## Usage
 Gymnasium has been updated. `/test.py` is a simple example.
 ```
