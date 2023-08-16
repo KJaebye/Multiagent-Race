@@ -109,7 +109,7 @@ class MultiHumanoidEnv(MujocoEnv, utils.EzPickle):
         self.sa_action_dim = 17
 
         # extract agent from base xml
-        local_position = "envs/assets/xml/" + xml_file
+        local_position = "envs/race/assets/xml/" + xml_file
         self.fullxml = create_multiagent_xml(local_position)
 
         MujocoEnv.__init__(

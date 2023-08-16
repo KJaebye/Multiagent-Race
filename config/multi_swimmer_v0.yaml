@@ -1,5 +1,5 @@
 ENV_NAME: "MultiSwimmer-v0"
-TEMPLATE: "./envs/assets/multi_swimmer.xml"
+TEMPLATE: "./envs/race/assets/multi_swimmer.xml"
 
 RNG_SEED: 42
 

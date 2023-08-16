@@ -1,7 +1,4 @@
-__credits__ = ["Rushiv Arora"]
-
 import numpy as np
-import math
 
 from gymnasium import utils
 from gymnasium.envs.mujoco import MujocoEnv
@@ -14,17 +11,25 @@ except ImportError as e:
 else:
     MUJOCO_IMPORT_ERROR = None
 
+
+import math
 from typing import Optional, Union
 
 from envs.utils.ma_xml import create_multiagent_xml
 from config.config import cfg
 
-class MultiSwimmerEnv(MujocoEnv, utils.EzPickle):
+
+
+DEFAULT_CAMERA_CONFIG = {
+    "distance": 4.0,
+}
+
+
+class MultiAntEnv(MujocoEnv, utils.EzPickle):
     """
     ## Description
-
-    This environment is based on the mujoco environment from gymnasium swimmer_v0.py 
-
+    This environment is based on the single agent mujoco environment from gymnasium ant_v4.py
+    
     """
 
     metadata = {
@@ -33,44 +38,66 @@ class MultiSwimmerEnv(MujocoEnv, utils.EzPickle):
             "rgb_array",
             "depth_array",
         ],
-        "render_fps": 25,
+        "render_fps": 20,
     }
 
     def __init__(
         self,
-        agent_num             = cfg.EMAT.AGENT_NUM,
-        xml_file              = "swimmer.xml",
-        forward_reward_weight = cfg.ENV.FORWARD_REWARD_WEIGHT,
-        ctrl_cost_weight      = cfg.ENV.CTRL_COST_WEIGHT,
-        reset_noise_scale     = cfg.ENV.RESET_NOISE_SCALE,
+        agent_num                = cfg.EMAT.AGENT_NUM,
+        xml_file                 = "ant.xml",
+        ctrl_cost_weight         = 0.5,
+        use_contact_forces       = True,
+        contact_cost_weight      = 5e-4,
+        healthy_reward           = 1.0,
+        terminate_when_unhealthy = True,
+        healthy_z_range          = (0.2, 1.0),
+        contact_force_range      = (-1.0, 1.0),
+        reset_noise_scale        = 0.1,
         exclude_current_positions_from_observation=False,
         **kwargs,
     ):
         utils.EzPickle.__init__(
             self,
-            forward_reward_weight,
+            xml_file,
             ctrl_cost_weight,
+            use_contact_forces,
+            contact_cost_weight,
+            healthy_reward,
+            terminate_when_unhealthy,
+            healthy_z_range,
+            contact_force_range,
             reset_noise_scale,
             exclude_current_positions_from_observation,
             **kwargs,
         )
 
-        self._forward_reward_weight = forward_reward_weight
         self._ctrl_cost_weight = ctrl_cost_weight
+        self._contact_cost_weight = contact_cost_weight
+
+        self._healthy_reward = healthy_reward
+        self._terminate_when_unhealthy = terminate_when_unhealthy
+        self._healthy_z_range = healthy_z_range
+
+        self._contact_force_range = contact_force_range
 
         self._reset_noise_scale = reset_noise_scale
 
-        self._exclude_current_positions_from_observation = (
-            exclude_current_positions_from_observation
-        )
+        self._use_contact_forces = use_contact_forces
 
         self.agent_num = agent_num
 
         #----------------------- single agent observation dim -----------------------#
-        # 5: sa_qpos
-        # 5: sa_qvel
+        # 15: sa_qpos
+        # 14: sa_qvel
         # 2 : relative x pos and relative x vel
-        self.sa_obs_dim = (5 + 5 + 2 * self.agent_num)
+        # 78: mjtNum* cfrc_ext; // com-based external force on body (nbody x 6). nbody==13. 
+        #     In single ant env, nbody==14 that contains 13 bodies and 1 worldbody
+        #     In 2 ant env, nbody==27 that contains 2*13 bodies and 1 worldbody
+        self.sa_obs_dim = (15 + 14 + 2 * self.agent_num)
+        if use_contact_forces:
+            self.sa_obs_dim += 78
+
+        # observation space definition
         sa_obs_space = Box(
             low=-np.inf, high=np.inf, shape=(1, self.sa_obs_dim), dtype=np.float64
         )
@@ -80,15 +107,69 @@ class MultiSwimmerEnv(MujocoEnv, utils.EzPickle):
         observation_space = ma_obs_space
 
         #----------------------- single agent action dim -----------------------#
-        self.sa_action_dim = 2
+        self.sa_action_dim = 8
 
         # extract agent from base xml
-        local_position = "envs/assets/xml/" + xml_file
+        local_position = "envs/race/assets/xml/" + xml_file
         self.fullxml = create_multiagent_xml(local_position)
 
         MujocoEnv.__init__(
-            self, "swimmer.xml", 4, observation_space=observation_space, **kwargs
+            self,
+            xml_file,
+            5,
+            observation_space=observation_space,
+            default_camera_config=DEFAULT_CAMERA_CONFIG,
+            **kwargs,
         )
+
+    def step(self, action):
+        # input action is a list
+        action = np.hstack(action)
+        
+        ma_xy_position_before = self.ma_position[:, :2]
+        self.do_simulation(action, self.frame_skip)
+        ma_xy_position_after = self.ma_position[:, :2]
+        
+        ma_xy_velocity = (ma_xy_position_after - ma_xy_position_before) / self.dt
+
+        ma_forward_reward = self.get_ma_forward_reward(ma_xy_velocity)
+        ma_healthy_reward = self.ma_healthy_reward
+        
+        ma_rewards = ma_forward_reward + ma_healthy_reward
+
+        ma_costs = ma_ctrl_cost = self.get_ma_control_cost(action)
+
+        terminateds = self.terminateds
+        observations = self._get_ma_obs()
+        info = {    
+            "ma_reward_forward": ma_forward_reward,
+            "ma_reward_ctrl": -ma_ctrl_cost,
+            "ma_reward_survive": ma_healthy_reward,
+            "ma_x_position": ma_xy_position_after[:, 0],
+            "ma_y_position": ma_xy_position_after[:, 1],
+            "ma_distance_from_origin": np.linalg.norm(ma_xy_position_after[:, :2]-self.initial_ma_position[:, :2], ord=2),
+            "ma_x_velocity": ma_xy_velocity[:, 0],
+            "ma_y_velocity": ma_xy_velocity[:, 1],
+            "ma_forward_reward": ma_forward_reward,
+        }
+
+        if self._use_contact_forces:
+            ma_contact_cost = self.ma_contact_cost
+            ma_costs += ma_contact_cost
+            info["ma_reward_ctrl"] = -ma_ctrl_cost
+
+        rewards = [(ma_rewards[idx] - ma_costs[idx]) for idx in range(self.agent_num)]
+
+        # if cfg.COMP.USE_COMPETITION:
+        #     # The last one gets 0, and the first one gets N. N equals to agent number.
+        #     # competition_reward = ma_xy_position_after[:, 0].argsort().argsort() * cfg.COMP.COMPETITION_REWARD_COEF
+        #     competition_reward = ma_xy_velocity[:, 0].argsort().argsort() * cfg.COMP.COMPETITION_REWARD_COEF
+        #     rewards = [(rewards[idx] + competition_reward[idx]) for idx in range(self.agent_num)]
+        
+        if self.render_mode == "human":
+            self.render()
+        return observations, rewards, terminateds, False, info
+
 
     def _initialize_simulation(self):
         # import model from xml string
@@ -97,6 +178,15 @@ class MultiSwimmerEnv(MujocoEnv, utils.EzPickle):
         self.model.vis.global_.offwidth = self.width
         self.model.vis.global_.offheight = self.height
         self.data = mujoco.MjData(self.model)
+
+    @property
+    def ma_healthy_reward(self):
+        return (
+            np.array([
+                (self.ma_is_healthy[idx] or self._terminate_when_unhealthy)
+            * self._healthy_reward for idx in range(self.agent_num)
+            ])[:, np.newaxis]
+        )
 
     def get_ma_control_cost(self, action):
         # break action into sub actions
@@ -113,24 +203,69 @@ class MultiSwimmerEnv(MujocoEnv, utils.EzPickle):
         ma_action = np.array([action[(idx-1)*agent_action_length:idx*agent_action_length] 
                               for idx in range(1, self.agent_num+1)])
         return ma_action
-    
+
+    @property
+    def ma_contact_forces(self):
+        raw_contact_forces = self.data.cfrc_ext[1:, :] # first line contact friction data is worldbody?
+        assert len(raw_contact_forces) % self.agent_num == 0, "Contact forces cannot be aligned!"
+        agent_contact_length = int(len(raw_contact_forces) / self.agent_num)
+        ma_contact_forces = np.array([raw_contact_forces[(idx-1)*agent_contact_length:idx*agent_contact_length] 
+                              for idx in range(1, self.agent_num+1)])
+        
+        min_value, max_value = self._contact_force_range
+        ma_contact_forces = np.array([
+            np.clip(ma_contact_forces[idx], min_value, max_value) for idx in range(self.agent_num)
+            ])
+        return ma_contact_forces
+
+    @property
+    def ma_contact_cost(self):
+        ma_contact_cost = np.array([
+            self._contact_cost_weight * np.sum(np.square(self.ma_contact_forces[idx])) for idx in range(self.agent_num)
+            ])[:, np.newaxis]
+        return ma_contact_cost
+
+    @property
+    def ma_is_healthy(self):
+        min_z, max_z = self._healthy_z_range
+        ma_is_healthy = np.array([
+            np.isfinite(self.ma_qpos[idx]).all() and 
+            np.isfinite(self.ma_qvel[idx]).all() and 
+            min_z <= self.ma_qpos[idx][2] <= max_z for idx in range(self.agent_num)]
+            )
+        return ma_is_healthy
+
+    @property
+    def terminateds(self):
+        # terminateds = not self.ma_is_healthy.all() if self._terminate_when_unhealthy else False
+        # return [terminateds] * self.agent_num
+        terminated = [not is_healthy for is_healthy in self.ma_is_healthy]
+        return terminated
+
     def _get_ma_obs(self):
         return [self._get_sa_obs(idx) for idx in range(self.agent_num)]
-    
+
+
     def _get_sa_obs(self, idx):
         """ Return single agent observation. """
         #--------------- Proprioceptive observations -----------------------#
         sa_qpos = self.ma_qpos[idx]
         sa_qvel = self.ma_qvel[idx]
+        sa_contact_force = self.ma_contact_forces[idx].flat.copy()
 
         #------------------ External observations --------------------------#
         sa_relative_obs = np.hstack(self.get_sa_relative_obs(idx))
         
         #----------------- Concatenate observations ------------------------#
-        sa_obs = np.concatenate((sa_qpos, sa_qvel))
+        if self._use_contact_forces:
+            sa_obs = np.concatenate((sa_qpos, sa_qvel, sa_contact_force))
+        else:
+            sa_obs = np.concatenate((sa_qpos, sa_qvel))
+
         sa_obs = np.concatenate((sa_obs, sa_relative_obs))
         return sa_obs
-    
+
+        
     def get_sa_relative_obs(self, idx):
         """ Return a list including relative observation infos. """
         # single agent position and velocity
@@ -145,10 +280,12 @@ class MultiSwimmerEnv(MujocoEnv, utils.EzPickle):
             # relative position and velocity
             r_position = j_position - sa_position
             r_velocity = j_velocity - sa_velocity
-            # only take x direction relative pos and vel
+
             j_relative_obs = np.concatenate((r_position[:1], r_velocity[:1]))
             if not cfg.ENV.USE_RELATIVE_OBS:
                 j_relative_obs = np.zeros((2, ))
+            if cfg.ENV.USE_NOISE:
+                j_relative_obs = np.random.random((2, ))
             sa_relative_obs.append(j_relative_obs)
         
         return sa_relative_obs
@@ -173,54 +310,19 @@ class MultiSwimmerEnv(MujocoEnv, utils.EzPickle):
 
     @property
     def ma_position(self):
-        """ Return an array to get multi agent x y positions. """
-        return self.ma_qpos[:, :2]
+        """ Return an array to get multi agent x y z positions. """
+        return self.ma_qpos[:, :3]
     
     @property
     def ma_velocity(self):
-        """ Return an array to get multi agent x y velocities. """
-        return self.ma_qvel[:, :2]
-    
+        """ Return an array to get multi agent x y z velocities. """
+        return self.ma_qvel[:, :3]
+        
     def get_ma_forward_reward(self, ma_xy_velocity):
         """ Return multi agent forward reward. """
         # 0 denote x, 1 denote y
         ma_forward_reward = np.array([ma_xy_velocity[idx, 0] for idx in range(self.agent_num)])[:, np.newaxis]
         return ma_forward_reward
-
-
-    def step(self, action):
-        # input action is a list
-        action = np.hstack(action)
-
-        ma_xy_position_before = self.ma_position[:, :2]
-        self.do_simulation(action, self.frame_skip)
-        ma_xy_position_after = self.ma_position[:, :2]
-        ma_xy_velocity = (ma_xy_position_after - ma_xy_position_before) / self.dt
-
-        ma_forward_reward = self.get_ma_forward_reward(ma_xy_velocity) * self._forward_reward_weight
-
-        ma_costs = ma_ctrl_cost = self.get_ma_control_cost(action)
-
-        observations = self._get_ma_obs()
-        ma_rewards = ma_forward_reward - ma_ctrl_cost
-        info = {
-            "ma_reward_fwd": ma_forward_reward,
-            "ma_reward_ctrl": -ma_ctrl_cost,
-            "ma_x_position": ma_xy_position_after[:, 0],
-            "ma_y_position": ma_xy_position_after[:, 1],
-            "ma_distance_from_origin": np.linalg.norm(ma_xy_position_after[:, :2]-self.initial_ma_position[:, :2], ord=2),
-            "ma_x_velocity": ma_xy_velocity[:, 0],
-            "ma_y_velocity": ma_xy_velocity[:, 1],
-            "ma_forward_reward": ma_forward_reward,
-        }
-
-        rewards = [ma_rewards[idx] for idx in range(self.agent_num)]
-
-        if self.render_mode == "human":
-            self.render()
-
-        return observations, rewards, [False] * self.agent_num, False, info
-
 
     def reset_model(self):
         noise_low = -self._reset_noise_scale
@@ -254,6 +356,7 @@ class MultiSwimmerEnv(MujocoEnv, utils.EzPickle):
         self.set_state(init_ma_qpos, init_ma_qvel)
 
         observation = self._get_ma_obs()
+
         return observation
     
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None,):

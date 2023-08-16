@@ -1,5 +1,5 @@
 ENV_NAME: "MultiAnt-v0"
-TEMPLATE: "./envs/assets/multi_ant.xml"
+TEMPLATE: "./envs/race/assets/multi_ant.xml"
 RNG_SEED: 42
 
 USE_GPU: True

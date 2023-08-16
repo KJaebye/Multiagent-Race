@@ -255,7 +255,7 @@ _C.RENDER_EPISODES = 1
 _C.IFI = 0.01 
 
 # Unimal template path relative to the basedir
-_C.TEMPLATE = "./envs/assets/multi_ant.xml"
+_C.TEMPLATE = "./envs/race/assets/multi_ant.xml"
 
 # to specify user's name for simply collecting training data.
 _C.USER_NAME = "emat"

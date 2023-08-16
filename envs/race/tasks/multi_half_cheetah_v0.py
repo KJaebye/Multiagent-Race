@@ -1,15 +1,13 @@
+__credits__ = ["Rushiv Arora"]
+
 import numpy as np
 
 from gymnasium import utils
 from gymnasium.envs.mujoco import MujocoEnv
 from gymnasium.spaces import Box
 
-
 DEFAULT_CAMERA_CONFIG = {
-    "trackbodyid": 2,
     "distance": 4.0,
-    "lookat": np.array((0.0, 0.0, 1.15)),
-    "elevation": -20.0,
 }
 
 try:
@@ -19,7 +17,6 @@ except ImportError as e:
 else:
     MUJOCO_IMPORT_ERROR = None
 
-
 import math
 from typing import Optional, Union
 
@@ -27,13 +24,12 @@ from envs.utils.ma_xml import create_multiagent_xml
 from config.config import cfg
 
 
-
-class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
+class MultiHalfCheetahEnv(MujocoEnv, utils.EzPickle):
     """
     ## Description
 
-    This environment builds on the single agent mujoco environment from gymnasium walker2d_v4.py
-    
+    This environment is based on the single agent mujoco environment from gymnasium half_cheetah_v4.py
+
     """
 
     metadata = {
@@ -42,19 +38,15 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
             "rgb_array",
             "depth_array",
         ],
-        "render_fps": 125,
+        "render_fps": 20,
     }
 
     def __init__(
         self,
-        agent_num                = cfg.EMAT.AGENT_NUM,
-        forward_reward_weight    = cfg.ENV.FORWARD_REWARD_WEIGHT,
-        ctrl_cost_weight         = cfg.ENV.CTRL_COST_WEIGHT,
-        healthy_reward           = cfg.ENV.HEALTHY_REWARD,
-        terminate_when_unhealthy = cfg.ENV.TERMINATE_WHEN_UNHEALTHY,
-        healthy_z_range          = cfg.ENV.HEALTHY_Z_RANGE,
-        healthy_angle_range      = cfg.ENV.HEALTHY_ANGLE_RANGE,
-        reset_noise_scale        = cfg.ENV.RESET_NOISE_SCALE,
+        agent_num             = cfg.EMAT.AGENT_NUM,
+        forward_reward_weight = cfg.ENV.FORWARD_REWARD_WEIGHT,
+        ctrl_cost_weight      = cfg.ENV.CTRL_COST_WEIGHT,
+        reset_noise_scale     = cfg.ENV.RESET_NOISE_SCALE,
         exclude_current_positions_from_observation=False,
         **kwargs,
     ):
@@ -62,23 +54,14 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
             self,
             forward_reward_weight,
             ctrl_cost_weight,
-            healthy_reward,
-            terminate_when_unhealthy,
-            healthy_z_range,
-            healthy_angle_range,
             reset_noise_scale,
             exclude_current_positions_from_observation,
             **kwargs,
         )
 
         self._forward_reward_weight = forward_reward_weight
+
         self._ctrl_cost_weight = ctrl_cost_weight
-
-        self._healthy_reward = healthy_reward
-        self._terminate_when_unhealthy = terminate_when_unhealthy
-
-        self._healthy_z_range = healthy_z_range
-        self._healthy_angle_range = healthy_angle_range
 
         self._reset_noise_scale = reset_noise_scale
 
@@ -105,13 +88,13 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
         self.sa_action_dim = 6
 
         # extract agent from base xml
-        local_position = "envs/assets/xml/walker2d.xml"
+        local_position = "envs/race/assets/xml/half_cheetah.xml"
         self.fullxml = create_multiagent_xml(local_position)
 
         MujocoEnv.__init__(
             self,
-            "walker2d.xml",
-            4,
+            "half_cheetah.xml",
+            5,
             observation_space=observation_space,
             default_camera_config=DEFAULT_CAMERA_CONFIG,
             **kwargs,
@@ -142,29 +125,6 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
         ma_qvel = np.array([self.data.qvel.ravel().copy()[idx*agent_qvel_length:(idx+1)*agent_qvel_length] 
                               for idx in range(self.agent_num)])
         return ma_qvel
-
-    @property
-    def ma_healthy_reward(self):
-        return (
-            np.array([
-                (self.ma_is_healthy[idx] or self._terminate_when_unhealthy)
-            * self._healthy_reward for idx in range(self.agent_num)
-            ])[:, np.newaxis]
-        )
-    
-    @property
-    def ma_is_healthy(self):
-        ma_z = self.ma_qpos[:, 1]
-        ma_angle = self.ma_qpos[:, 2]
-
-        min_z, max_z = self._healthy_z_range
-        min_angle, max_angle = self._healthy_angle_range
-
-        ma_healthy_z = np.array([min_z < ma_z[idx] < max_z for idx in range(self.agent_num)])
-        ma_healthy_angle = np.array([min_angle < ma_angle[idx] < max_angle for idx in range(self.agent_num)])
-        ma_is_healthy = np.array([ma_healthy_z[idx] and ma_healthy_angle[idx] for idx in range(self.agent_num)])
-
-        return ma_is_healthy
     
     def get_ma_action(self, action):
         """ Break action into sub actions corresponding to each agent. """
@@ -181,7 +141,7 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
             self._ctrl_cost_weight * np.sum(np.square(ma_action[idx])) for idx in range(self.agent_num)
             ])[:, np.newaxis]
         return ma_control_cost
-
+    
     @property
     def ma_position(self):
         """ Return an array to get multi agent x positions. """
@@ -196,13 +156,6 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
     def ma_velocity(self):
         """ Return an array to get multi agent x velocities. """
         return self.ma_qvel[:, :1]
-
-    @property
-    def terminateds(self):
-        # terminated = not self.ma_is_healthy.any() if self._terminate_when_unhealthy else False
-        # return [terminated] * self.agent_num
-        terminated = [not is_healthy for is_healthy in self.ma_is_healthy]
-        return terminated
     
     def _get_ma_obs(self):
         return [self._get_sa_obs(idx) for idx in range(self.agent_num)]
@@ -211,7 +164,7 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
         """ Return single agent observation. """
         #--------------- Proprioceptive observations -----------------------#
         sa_position = self.ma_qpos[idx].copy()
-        sa_velocity = np.clip(self.ma_qvel[idx].copy(), -10, 10)
+        sa_velocity = self.ma_qvel[idx].copy()
 
         #------------------ External observations --------------------------#
         sa_relative_obs = np.hstack(self.get_sa_relative_obs(idx))
@@ -240,8 +193,7 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
             if not cfg.ENV.USE_RELATIVE_OBS:
                 j_relative_obs = np.zeros((2, ))
             if cfg.ENV.USE_NOISE:
-                j_relative_obs = np.random.normal(0, 1, (2, ))
-                # j_relative_obs = np.random.random((2, ))
+                j_relative_obs = np.random.random((2, ))
             sa_relative_obs.append(j_relative_obs)
 
         return sa_relative_obs
@@ -256,27 +208,23 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
 
         ma_x_velocity = (ma_x_position_after - ma_x_position_before) / self.dt
 
-        ma_ctrl_cost = self.get_ma_control_cost(action)
+        ma_costs = ma_ctrl_cost = self.get_ma_control_cost(action)
 
-        ma_forward_reward = self._forward_reward_weight * ma_x_velocity
-        ma_healthy_reward = self.ma_healthy_reward
-
-        ma_rewards = ma_forward_reward + ma_healthy_reward
-        ma_costs = ma_ctrl_cost
+        ma_rewards = ma_forward_reward = self._forward_reward_weight * ma_x_velocity
 
         observations = self._get_ma_obs()
-        terminateds = self.terminateds
-
         rewards = [ma_rewards[idx] - ma_costs[idx] for idx in range(self.agent_num)]
-
+        terminateds = [False] * self.agent_num
+        
         info = {
             "ma_x_position": ma_x_position_after,
             "ma_x_velocity": ma_x_velocity,
+            "ma_reward_run": ma_forward_reward,
+            "ma_reward_ctrl": -ma_ctrl_cost,
         }
 
         if self.render_mode == "human":
             self.render()
-
         return observations, rewards, terminateds, False, info
 
     def reset_model(self):
@@ -286,8 +234,9 @@ class MultiWalker2dEnv(MujocoEnv, utils.EzPickle):
         qpos = self.init_qpos + self.np_random.uniform(
             low=noise_low, high=noise_high, size=self.model.nq
         )
-        qvel = self.init_qvel + self.np_random.uniform(
-            low=noise_low, high=noise_high, size=self.model.nv
+        qvel = (
+            self.init_qvel
+            + self._reset_noise_scale * self.np_random.standard_normal(self.model.nv)
         )
 
         self.set_state(qpos, qvel)

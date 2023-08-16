@@ -106,7 +106,7 @@ class MultiHopperEnv(MujocoEnv, utils.EzPickle):
         self.sa_action_dim = 3
 
         # extract agent from base xml
-        local_position = "envs/assets/xml/hopper.xml"
+        local_position = "envs/race/assets/xml/hopper.xml"
         self.fullxml = create_multiagent_xml(local_position)
 
         MujocoEnv.__init__(

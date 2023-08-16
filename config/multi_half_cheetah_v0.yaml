@@ -1,5 +1,5 @@
 ENV_NAME: "MultiHalfCheetah-v0"
-TEMPLATE: "./envs/assets/multi_half_cheetah.xml"
+TEMPLATE: "./envs/race/assets/multi_half_cheetah.xml"
 
 RNG_SEED: 42
 

@@ -1,5 +1,5 @@
 ENV_NAME: "MultiWalker2d-v0"
-TEMPLATE: "./envs/assets/multi_walker2d.xml"
+TEMPLATE: "./envs/race/assets/multi_walker2d.xml"
 
 RNG_SEED: 42
 

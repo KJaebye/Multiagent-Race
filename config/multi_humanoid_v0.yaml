@@ -1,5 +1,5 @@
 ENV_NAME: "MultiHumanoid-v0"
-TEMPLATE: "./envs/assets/multi_humanoid.xml"
+TEMPLATE: "./envs/race/assets/multi_humanoid.xml"
 RNG_SEED: 42
 
 USE_GPU: True

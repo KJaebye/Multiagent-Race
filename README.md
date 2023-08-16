@@ -1,5 +1,6 @@
 # Multiagent-Race
-This repo provides environments for MuJoCo multi-agent race.
+This repo provides environments for MuJoCo multi-agent self-interested competition tasks.
+There are three classes of tasks including Race, Grasp, and Screw.
 ## Usage
 Gymnasium has been updated. `/test.py` is a simple example.
 ```
