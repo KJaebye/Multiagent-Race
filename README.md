@@ -1,6 +1,12 @@
 # Multiagent-Race
 This repo provides environments for MuJoCo multi-agent self-interested competition tasks.
-There are three classes of tasks including Race, Grasp, and Screw.
+Where the relative information is treated as competitive message that is directly sent to the neural network. Training
+under competitive condition can stimulate the potential of robot, thus obtain a higher performance than single agent training.
+
+The reason that competitive learning can facilitate training, is the competitive information between robots naturally 
+build a relationship between better actions, dominant position, and higher reward. This relationship helps to distinguish
+and understand what is a more accurate state-action-reward pair.
+
 ## Usage
 Gymnasium has been updated. `/test.py` is a simple example.
 ```
